@@ -432,10 +432,44 @@ jobs:
             if (Test-Path -LiteralPath $appDirectory) {
               throw "App directory already exists; refusing to mix application layouts."
             }
-            npx --yes @electron/asar@3.4.1 extract $archive $appDirectory
+            npm install --prefix .asar-tools --no-save --no-package-lock --ignore-scripts '@electron/asar@3.4.1'
             if ($LASTEXITCODE -ne 0) {
-              throw "Failed to extract app.asar."
+              throw "Failed to install the app archive tool."
             }
+            $extractScript = @'
+          const fs = require('fs');
+          const path = require('path');
+          const asar = require('./.asar-tools/node_modules/@electron/asar');
+          const archive = 'FE/resources/app.asar';
+          const destination = path.resolve('FE/resources/app');
+          for (const filename of asar.listPackage(archive)) {
+            const relative = filename.replace(/^[/\\]/, '');
+            const entry = asar.statFile(archive, relative, true);
+            const target = path.resolve(destination, relative);
+            if (!target.startsWith(destination + path.sep)) {
+              throw new Error('Archive entry escapes application directory: ' + filename);
+            }
+            if (entry.files) {
+              fs.mkdirSync(target, { recursive: true });
+            } else if (entry.unpacked) {
+              const source = path.join(archive + '.unpacked', relative);
+              if (!fs.existsSync(source)) {
+                if (relative !== 'NOTICES-reporter.txt') {
+                  throw new Error('Missing external application file: ' + relative);
+                }
+                console.log('Installer omits NOTICES-reporter.txt; preserving its supplied notice files.');
+              }
+            } else {
+              fs.mkdirSync(path.dirname(target), { recursive: true });
+              fs.writeFileSync(target, asar.extractFile(archive, relative));
+            }
+          }
+          '@
+            $extractScript | node
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to extract embedded application files."
+            }
+            Copy-Item -Path "$archive.unpacked/*" -Destination $appDirectory -Recurse -Force
             foreach ($relativePath in @('package.json', 'out/main.js', 'out/WebServer/ClientApp/dist/index.html')) {
               if (-not (Test-Path -LiteralPath (Join-Path $appDirectory $relativePath))) {
                 throw "Missing extracted application file: $relativePath"
