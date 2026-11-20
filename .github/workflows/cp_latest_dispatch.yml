@@ -546,17 +546,22 @@ jobs:
       - name: Enable Chinese translation
         if: startsWith(env.PATCH_LANGUAGE, 'Yes')
         run: |
-          if ($env:OS_ARCH -eq 'Windows (x86_64)' -and [version]$env:SCRAPED_VERSION -ge [version]'8.0.0') {
-            throw 'Chinese translation currently stalls Windows v8 traffic inspectors. Select No for patch-language.'
-          }
           $translate_js = "msojocs-patch/server/translate.js"
+          if ($env:OS_ARCH -eq 'Windows (x86_64)' -and [version]$env:SCRAPED_VERSION -ge [version]'8.0.0') {
+            $translate_js = 'utils/v8-compat/translate.js'
+            $testDependencies = Join-Path $env:RUNNER_TEMP 'fiddler-translation-tests'
+            npm.cmd install --prefix $testDependencies --no-save --no-package-lock --ignore-scripts jsdom@26.1.0
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to prepare translation regression tests.' }
+            node utils/v8-compat/test-translate.cjs (Join-Path $testDependencies 'node_modules/jsdom') msojocs-patch/server/translate.js
+            if ($LASTEXITCODE -ne 0) { throw 'Translation payload safety or responsiveness checks failed.' }
+          }
           $dest_translate = "FE/resources/app/out/translate.js"
 
           if (Test-Path $translate_js) {
             Copy-Item -Path $translate_js -Destination $dest_translate -Force
             Write-Host "translate.js copied, Chinese language enabled (Ctrl+T to switch)"
           } else {
-            Write-Host "translate.js not found in server directory"
+            throw 'Translation script is missing.'
           }
 
       - name: Set patch server port (in main.js of server)
