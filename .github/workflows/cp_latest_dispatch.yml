@@ -6,7 +6,7 @@ on:
       os-and-arch:
         description: 'Operating System And Architecture'
         required: true
-        default: '6.0.0'
+        default: 'Windows (x86_64)'
         type: choice
         options:
           - Windows (x86_64)
@@ -416,6 +416,33 @@ jobs:
 
       - name: Rename main FE folder
         run: Rename-Item -Path "fe_app" -NewName "FE"
+
+      - name: Set up Node.js for Windows app archive extraction
+        if: env.OS_ARCH == 'Windows (x86_64)'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Extract Windows app archive
+        if: env.OS_ARCH == 'Windows (x86_64)'
+        run: |
+          $archive = "FE/resources/app.asar"
+          $appDirectory = "FE/resources/app"
+          if (Test-Path -LiteralPath $archive) {
+            if (Test-Path -LiteralPath $appDirectory) {
+              throw "App directory already exists; refusing to mix application layouts."
+            }
+            npx --yes @electron/asar@3.4.1 extract $archive $appDirectory
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to extract app.asar."
+            }
+            foreach ($relativePath in @('package.json', 'out/main.js', 'out/WebServer/ClientApp/dist/index.html')) {
+              if (-not (Test-Path -LiteralPath (Join-Path $appDirectory $relativePath))) {
+                throw "Missing extracted application file: $relativePath"
+              }
+            }
+            Rename-Item -LiteralPath $archive -NewName "app.asar.original"
+          }
 
       - name: Patch fiddler.dll / libfiddler.dll
         run: |
