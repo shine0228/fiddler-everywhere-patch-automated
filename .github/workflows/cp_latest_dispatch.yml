@@ -586,6 +586,7 @@ jobs:
             Copy-Item -LiteralPath $library -Destination $target -Force
             Copy-Item -LiteralPath 'utils/v8-compat/Setup-LocalDomains.cmd' -Destination 'FE/Setup-LocalDomains.cmd'
             Copy-Item -LiteralPath 'utils/v8-compat/WINDOWS_README.txt' -Destination 'FE/WINDOWS_README.txt'
+            Copy-Item -LiteralPath 'LICENSE.md' -Destination 'FE/PATCH_LICENSE.md'
           }
 
       - name: Set user credentials
