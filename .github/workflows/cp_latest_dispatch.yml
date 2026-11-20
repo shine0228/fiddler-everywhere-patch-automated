@@ -181,7 +181,12 @@ jobs:
 
       - name: Set Yui Release
         if: env.IS_COMPATIBLE_CONT == 'true' 
-        run: echo "Yui_RELEASE=continuous" >> $env:GITHUB_ENV
+        run: |
+          $release = 'continuous'
+          if ($env:OS_ARCH -eq 'Windows (x86_64)' -and [version]$env:SCRAPED_VERSION -ge [version]'8.0.0') {
+            $release = 'v1.1.3'
+          }
+          "Yui_RELEASE=$release" >> $env:GITHUB_ENV
         
       - name: Download Yui Patch
         run: |
@@ -197,6 +202,12 @@ jobs:
 
             # Download the files
             Invoke-WebRequest -Uri $YuiFiddlerUrl -OutFile "Yui\$env:Yui_FIDDLER_NAME"
+            if ($env:OS_ARCH -eq 'Windows (x86_64)' -and $env:Yui_RELEASE -eq 'v1.1.3') {
+              $hash = (Get-FileHash -LiteralPath "Yui\$env:Yui_FIDDLER_NAME" -Algorithm SHA256).Hash
+              if ($hash -ne '2B1C1DC5B4E55D05C6CE071DC3157D73D9501673161EA129D5AEFF32CC43FA86') {
+                throw 'Windows native patch checksum did not match.'
+              }
+            }
           }
           catch {
             Write-Error "Failed to download the patch files. Error details: $_"
@@ -212,6 +223,9 @@ jobs:
 
   download-msojocs-server:
     runs-on: ubuntu-latest
+    needs: scrape_fe_version
+    env:
+      SCRAPED_VERSION: ${{ needs.scrape_fe_version.outputs.scraped_version }}
 
     steps:
       - name: Set up Git
@@ -223,7 +237,14 @@ jobs:
       - name: Configure sparse-checkout to download the server directory
         run: |
           Set-Content -Path ".git/info/sparse-checkout" -Value "server"
-          git pull origin main
+          $serverRef = '98f1bf1ea93b3191fecf9b57b5bb96ff11faf370'
+          if ([version]$env:SCRAPED_VERSION -ge [version]'8.0.0') {
+            $serverRef = 'fde77897f0c24485c38c98d0789dcba59f79d604'
+          }
+          git fetch --depth 1 origin $serverRef
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the required server version.' }
+          git checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to check out the required server version.' }
 
       - name: Move the downloaded directory to the target folder
         run: |
@@ -232,6 +253,17 @@ jobs:
 
       - name: List files in the msojocs/server directory
         run: Get-ChildItem -Path msojocs\server
+
+      - name: Download Windows v8 backend compatibility library
+        if: env.OS_ARCH == 'Windows (x86_64)'
+        run: |
+          if ([version]$env:SCRAPED_VERSION -ge [version]'8.0.0') {
+            Invoke-WebRequest -Uri 'https://github.com/msojocs/dotnet-runtime-for-fildder/releases/download/v10.0.9-1/System.Linq.dll' -OutFile 'msojocs/System.Linq.dll'
+            $hash = (Get-FileHash -LiteralPath 'msojocs/System.Linq.dll' -Algorithm SHA256).Hash
+            if ($hash -ne '4849D36A7797E415C91549274B2F0DFD6F3D606BEF65357995E70D08D5CFBEBB') {
+              throw 'Backend compatibility library checksum did not match.'
+            }
+          }
 
       - name: Upload msojocs folder as an artifact
         uses: actions/upload-artifact@v7
@@ -390,6 +422,8 @@ jobs:
       patched-fe-name: ${{ steps.rename-fe.outputs.patched-fe-name }}
       
     steps:
+      - uses: actions/checkout@v6
+
       - name: Download Yukuhana-Patch
         uses: actions/download-artifact@v8
         with:
@@ -512,6 +546,9 @@ jobs:
       - name: Enable Chinese translation
         if: startsWith(env.PATCH_LANGUAGE, 'Yes')
         run: |
+          if ($env:OS_ARCH -eq 'Windows (x86_64)' -and [version]$env:SCRAPED_VERSION -ge [version]'8.0.0') {
+            throw 'Chinese translation currently stalls Windows v8 traffic inspectors. Select No for patch-language.'
+          }
           $translate_js = "msojocs-patch/server/translate.js"
           $dest_translate = "FE/resources/app/out/translate.js"
 
@@ -533,6 +570,22 @@ jobs:
             Write-Host "Server port set to $env:PATCH_SERVER_PORT"
           } else {
             Write-Host "index.js (from server) not found"
+          }
+
+      - name: Prepare Windows v8 compatibility
+        if: env.OS_ARCH == 'Windows (x86_64)'
+        run: |
+          if ([version]$env:SCRAPED_VERSION -ge [version]'8.0.0') {
+            node utils/v8-compat/prepare-server.cjs msojocs-patch/server/index.js
+            if ($LASTEXITCODE -ne 0) { throw 'Server callback compatibility checks failed.' }
+            $library = 'msojocs-patch/System.Linq.dll'
+            $target = 'FE/resources/app/out/WebServer/System.Linq.dll'
+            if (-not (Test-Path -LiteralPath $library) -or -not (Test-Path -LiteralPath $target)) {
+              throw 'Required Windows v8 backend library is missing.'
+            }
+            Copy-Item -LiteralPath $library -Destination $target -Force
+            Copy-Item -LiteralPath 'utils/v8-compat/Setup-LocalDomains.cmd' -Destination 'FE/Setup-LocalDomains.cmd'
+            Copy-Item -LiteralPath 'utils/v8-compat/WINDOWS_README.txt' -Destination 'FE/WINDOWS_README.txt'
           }
 
       - name: Set user credentials
